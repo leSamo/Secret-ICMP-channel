@@ -5,9 +5,12 @@
 #include <iostream>
 
 #include <getopt.h>
+#include <sys/stat.h>
 
+#include <arpa/inet.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/ip.h>
+#include <netdb.h>
 
 using namespace std;
 
@@ -37,6 +40,47 @@ void printHelp() {
     cout << "  -l                    run as server, which listens to incoming ICMP messages and receives files" << endl;
     cout << "  -h                    show help" << endl;
     cout << "  -v                    verbose output, log additional debug info" << endl;
+}
+
+int runServer() {
+    // use pcap to listen for ICMP ping requests
+    // after receiving packet send ICMP ping response
+    // decrypt packet and save file
+
+    return EXIT_SUCCESS;
+}
+
+int runClient(string fileToTransfer, string receiverAddress) {
+    // check whether file exists and is accessible
+    struct stat fileInfo;
+
+    if (stat(fileToTransfer.c_str(), &fileInfo)) {
+        cerr << "File to transfer is inaccessible" << endl;
+        return EXIT_FAILURE;
+    }
+
+    // parse receiver address, if it's a hostname, translate it to IP address
+    struct sockaddr_in addressIn;
+
+    if (inet_pton(AF_INET, receiverAddress.c_str(), &(addressIn.sin_addr))) {
+        cout << "IP adress valid: " << receiverAddress << endl;
+    }
+    else {
+        hostent *record = gethostbyname(receiverAddress.c_str());
+
+        if (record == nullptr) {
+            cerr << "Invalid hostname: " << receiverAddress << endl;
+        }
+        else {
+            struct in_addr **addr_list = (struct in_addr**)record ->h_addr_list;
+
+            cout << "Hostname translated to: " << inet_ntoa(*addr_list[0]) << endl;
+        }
+    }
+
+    // encrypt file and send it using ICMP ping requests
+
+    return EXIT_SUCCESS;
 }
 
 int main(int argc, char* argv[]) {
@@ -80,17 +124,10 @@ int main(int argc, char* argv[]) {
         cerr << "Missing required arguments, either use -l to run as server or provide both -r and -s" << endl;
     }
 
-    // call either server or client function
-
-    // CLIENT
-        // check whether file exists and is readable
-        // parse receiver address, if it's a hostname, translate it to IP address
-        // encrypt file and send it using ICMP ping requests
-
-    // SERVER
-        // use pcap to listen for ICMP ping requests
-        // after receiving packet send ICMP ping response
-        // decrypt packet and save file
-   
-    return EXIT_SUCCESS;
+    if (runAsServer) {
+        return runServer();
+    }
+    else {
+        return runClient(fileToTransfer, receiverAddress);
+    }
 }
