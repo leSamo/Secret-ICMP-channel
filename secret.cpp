@@ -6,7 +6,13 @@
 
 #include <getopt.h>
 
+#include <netinet/ip_icmp.h>
+#include <netinet/ip.h>
+
 using namespace std;
+
+// we are considering max frame size of Ethernet
+#define MAX_IP_DATAGRAM_SIZE 1500
 
 // getopt shorthands
 #define OPT_NO_ARGUMENT 0
@@ -14,6 +20,12 @@ using namespace std;
 #define OPT_OPTIONAL_ARGUMENT 2
 
 bool verbose = false;
+
+struct icmp_packet
+{
+    struct icmphdr header;
+    char data[MAX_IP_DATAGRAM_SIZE - sizeof(struct iphdr) - sizeof(struct icmphdr)];
+};
 
 // print summary and option list when user enters -h or --help option
 void printHelp() {
@@ -32,10 +44,10 @@ int main(int argc, char* argv[]) {
     string receiverAddress;
     bool runAsServer = false;
 
-    int opt;
+    int option;
 
-    while((opt = getopt(argc, argv, ":r:s:lhv")) != -1) { 
-        switch(opt) { 
+    while ((option = getopt(argc, argv, ":r:s:lhv")) != -1) { 
+        switch (option) { 
             case 'r':
                 cout << "File to transfer: " << optarg << endl;
                 fileToTransfer = optarg;
@@ -63,11 +75,22 @@ int main(int argc, char* argv[]) {
         } 
     }
 
-    // check whether all mandatory options were used
+    // check whether all mandatory options were used (either -l or both -r and -s)
+    if (!runAsServer && (fileToTransfer.empty() || receiverAddress.empty())) {
+        cerr << "Missing required arguments, either use -l to run as server or provide both -r and -s" << endl;
+    }
 
-    // check whether file exists and is readable
+    // call either server or client function
 
-    // parse receiver address, if it's a hostname, translate it to IP address
+    // CLIENT
+        // check whether file exists and is readable
+        // parse receiver address, if it's a hostname, translate it to IP address
+        // encrypt file and send it using ICMP ping requests
+
+    // SERVER
+        // use pcap to listen for ICMP ping requests
+        // after receiving packet send ICMP ping response
+        // decrypt packet and save file
    
     return EXIT_SUCCESS;
 }
