@@ -7,9 +7,11 @@
 #include <sstream>
 
 #include <stdlib.h>
+#include <string.h>
 #include <getopt.h>
 #include <sys/stat.h>
 
+#include <fcntl.h>
 #include <arpa/inet.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/ip.h>
@@ -91,6 +93,75 @@ void handleErrors(void)
     abort();
 }
 
+// ICMP checksum according to RFC 792
+uint16_t getIcmpChecksum(uint16_t *b, int length) {
+    uint16_t *buf = b;
+    uint16_t sum = 0;
+    uint16_t result;
+    
+    // sum up all 16-bit words
+    for (sum = 0; length > 1; length -= 2) {
+        sum += *buf++;
+    }
+
+    // add last byte if length of data is even
+    if (length == 1) {
+        sum += *(uint16_t*)buf;
+    }
+
+    // do ones complement of the sum
+    sum = (sum >> 16) + (sum & 0xFFFF);
+    sum += (sum >> 16);
+    result = ~sum;
+
+    return result;
+}
+
+bool sendIcmpPacket(struct sockaddr_in *addr, char* data, uint16_t dataLength) {
+    uint8_t ttl = 255;
+
+    int socketDescriptor = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP);
+
+    if (socketDescriptor < 0) {
+        cerr << "Failed to open socket" << endl;
+        return false;
+    }
+
+    if (setsockopt(socketDescriptor, SOL_IP, IP_TTL, &ttl, sizeof(ttl)) != 0) {
+        cerr << "Failed to set TTL option" << endl;
+        return false;
+    }
+
+    if (fcntl(socketDescriptor, F_SETFL, O_NONBLOCK) != 0 ) {
+        cerr << "Failed to set non-blocking" << endl;
+        return false;
+    }
+
+    struct icmp icmpHeader;
+
+    // fill in ICMP header metadata
+    icmpHeader.icmp_type = ICMP_ECHO;
+    icmpHeader.icmp_code = 0;
+    icmpHeader.icmp_cksum = 0;
+    icmpHeader.icmp_id = 0;
+    icmpHeader.icmp_seq = 0;
+
+    // fill in ICMP data
+    u_int8_t icmpBuffer[1500];
+    u_int8_t *icmpData = icmpBuffer + sizeof(icmpHeader);
+
+    memcpy(icmpBuffer, &icmpHeader, sizeof(struct icmp));
+    memcpy(icmpData, data, dataLength);
+
+    if (sendto(socketDescriptor, icmpBuffer, sizeof(icmpHeader) + dataLength, 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0) {
+        cerr << "Failed to send packet" << endl;
+        return false;
+    }
+
+    cout << "Successfully sent echo request" << endl;
+    return true;
+}
+  
 // callback function to print info about every captured packet
 void handlePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_char* payload) {
     cout << endl << endl;
@@ -100,15 +171,6 @@ void handlePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_c
     string destMac = ether_ntoa((ether_addr*) headerEthernet->ether_dhost);
     string srcMac = ether_ntoa((ether_addr*) headerEthernet->ether_shost);
     u_short ethertype = ntohs(headerEthernet->ether_type);
-
-    if (verbose) {
-        static int totalPackets = 0;
-
-        cout << " number: " << ++totalPackets;
-        cout << " destMac: " << destMac;
-        cout << " srcMac: " << srcMac;
-        cout << " ethertype: " << ethertype;
-    }
 
     string sourceIPaddr;
     string destIPaddr;
@@ -129,22 +191,26 @@ void handlePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_c
             destIPaddr = inet_ntoa(in_addr {headerIPv4->daddr});
 
             if (true) {
-                cout << "IPv4, IHL: " << ipv4HeaderLengthInBytes << " protocol: " << headerIPv4->protocol << endl;
+                cout << "IPv4" << endl;
+                cout << sourceIPaddr << " > " << destIPaddr << endl;
+                cout << "IHL: " << ipv4HeaderLengthInBytes << endl;
+                cout << "Protocol: " << static_cast<int16_t>(headerIPv4->protocol) << endl;
             }
 
             switch (headerIPv4->protocol) {
                 case IPPROTO_ICMP: {
                     struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
 
-                    cout << "ICMP packet received" << endl;
-                    cout << "Type: " << icmpPacket->type << endl;
-                    cout << "Code: " << icmpPacket->code << endl;
-                    cout << "Checksum:" << icmpPacket->checksum << endl;
-                    cout << "Data length: " << packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr)) << endl;
+                    cout << "Type: " << static_cast<int16_t>(icmpPacket->type) << endl;
+                    cout << "Code: " << static_cast<int16_t>(icmpPacket->code) << endl;
+                    cout << "Checksum: " << icmpPacket->checksum << endl;
 
+                    u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
                     u_char* icmpData = (u_char*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
 
-                    printPacketData((u_char*)icmpData, packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr)));
+                    cout << "Total length: " << packetHeader->caplen << endl;
+                    cout << "Data length: " << icmpDataLength << endl;
+                    printPacketData((u_char*)icmpData, icmpDataLength);
 
                     break;
                 }
@@ -161,17 +227,6 @@ void handlePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_c
             return;
         }
     }
-
-    if (sourcePort != "") {
-        sourceIPaddr += " : " + sourcePort;
-    }
-
-    if (destPort != "") {
-        destIPaddr += " : " + destPort;
-    }
-
-    // print info header about packet
-    printf("%s > %s, length %d bytes\n", sourceIPaddr.c_str(), destIPaddr.c_str(), packetHeader->caplen);
 }
 
 int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *iv, unsigned char *ciphertext) {
@@ -328,13 +383,9 @@ int runClient(string fileToTransfer, string receiverAddress) {
         }
     }
 
-    unsigned char *buffer = (unsigned char*) malloc(1000);
+    char data[10] = {4,3,2,1,0};
 
-    encrypt((unsigned char*)"ahoj", 4, (unsigned char*)"xoleks00", (unsigned char*)"xoleks00", buffer);
-
-    cout << buffer << endl;
-
-
+    sendIcmpPacket(&addressIn, data, 3);
     // encrypt file and send it using ICMP ping requests
 
     return EXIT_SUCCESS;
