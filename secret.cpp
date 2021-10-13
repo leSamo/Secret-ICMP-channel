@@ -148,12 +148,17 @@ bool sendIcmpPacket(struct sockaddr_in *addr, char* data, uint16_t dataLength) {
 
     // fill in ICMP data
     u_int8_t icmpBuffer[1500];
-    u_int8_t *icmpData = icmpBuffer + sizeof(icmpHeader);
+    u_int8_t *icmpData = icmpBuffer + 12;
 
-    memcpy(icmpBuffer, &icmpHeader, sizeof(struct icmp));
+    memcpy(icmpBuffer, &icmpHeader, 12);
     memcpy(icmpData, data, dataLength);
 
-    if (sendto(socketDescriptor, icmpBuffer, sizeof(icmpHeader) + dataLength, 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0) {
+    cout << 12;
+
+    icmpHeader.icmp_cksum = getIcmpChecksum((uint16_t*)icmpBuffer, 12 + dataLength);
+    memcpy(icmpBuffer, &icmpHeader, 12);
+
+    if (sendto(socketDescriptor, icmpBuffer, 12 + dataLength, 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0) {
         cerr << "Failed to send packet" << endl;
         return false;
     }
@@ -163,7 +168,7 @@ bool sendIcmpPacket(struct sockaddr_in *addr, char* data, uint16_t dataLength) {
 }
   
 // callback function to print info about every captured packet
-void handlePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_char* payload) {
+void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_char* payload) {
     cout << endl << endl;
 
     // split ethernet header into its corresponding fields
@@ -340,7 +345,7 @@ int runServer() {
     }
 
     // capture -n packets with all supplied filters active, upon packet capture, invoke handlePacket function
-    pcap_loop(handle, 5, handlePacket, NULL);
+    pcap_loop(handle, 5, capturePacket, NULL);
 
     // free filter program
     pcap_freecode(&filter);
@@ -377,15 +382,18 @@ int runClient(string fileToTransfer, string receiverAddress) {
             cerr << "Invalid hostname: " << receiverAddress << endl;
         }
         else {
-            struct in_addr **addr_list = (struct in_addr**)record ->h_addr_list;
+            struct in_addr **addr_list = (struct in_addr**)record->h_addr_list;
 
-            cout << "Hostname translated to: " << inet_ntoa(*addr_list[0]) << endl;
+
+            if (inet_pton(AF_INET, inet_ntoa(*addr_list[0]), &(addressIn.sin_addr))) {
+                cout << "Hostname translated to: " << inet_ntoa(*addr_list[0]) << endl;
+            }
         }
     }
 
     char data[10] = {4,3,2,1,0};
 
-    sendIcmpPacket(&addressIn, data, 3);
+    sendIcmpPacket(&addressIn, data, 4);
     // encrypt file and send it using ICMP ping requests
 
     return EXIT_SUCCESS;
