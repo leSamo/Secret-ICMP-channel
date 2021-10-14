@@ -5,9 +5,11 @@
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <fstream>
 
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <getopt.h>
 #include <sys/stat.h>
 
@@ -94,30 +96,29 @@ void handleErrors(void)
 }
 
 // ICMP checksum according to RFC 792
-uint16_t getIcmpChecksum(uint16_t *b, int length) {
-    uint16_t *buf = b;
-    uint16_t sum = 0;
-    uint16_t result;
-    
-    // sum up all 16-bit words
-    for (sum = 0; length > 1; length -= 2) {
-        sum += *buf++;
-    }
-
-    // add last byte if length of data is even
-    if (length == 1) {
-        sum += *(uint16_t*)buf;
-    }
-
-    // do ones complement of the sum
-    sum = (sum >> 16) + (sum & 0xFFFF);
-    sum += (sum >> 16);
-    result = ~sum;
-
-    return result;
+uint16_t getIcmpChecksum(uint16_t *icmph, int len) {
+	uint16_t ret = 0;
+	uint32_t sum = 0;
+	uint16_t odd_byte;
+	
+	while (len > 1) {
+		sum += *icmph++;
+		len -= 2;
+	}
+	
+	if (len == 1) {
+		*(uint8_t*)(&odd_byte) = * (uint8_t*)icmph;
+		sum += odd_byte;
+	}
+	
+	sum =  (sum >> 16) + (sum & 0xffff);
+	sum += (sum >> 16);
+	ret =  ~sum;
+	
+	return ret; 
 }
 
-bool sendIcmpPacket(struct sockaddr_in *addr, char* data, uint16_t dataLength) {
+bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLength) {
     uint8_t ttl = 255;
 
     int socketDescriptor = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP);
@@ -148,18 +149,16 @@ bool sendIcmpPacket(struct sockaddr_in *addr, char* data, uint16_t dataLength) {
 
     // fill in ICMP data
     u_int8_t icmpBuffer[1500];
-    u_int8_t *icmpData = icmpBuffer + 12;
+    u_int8_t *icmpData = icmpBuffer + 8;
 
-    memcpy(icmpBuffer, &icmpHeader, 12);
+    memcpy(icmpBuffer, &icmpHeader, 8);
     memcpy(icmpData, data, dataLength);
 
-    cout << 12;
+    icmpHeader.icmp_cksum = getIcmpChecksum((uint16_t*)icmpBuffer, 8 + dataLength);
+    memcpy(icmpBuffer, &icmpHeader, 8);
 
-    icmpHeader.icmp_cksum = getIcmpChecksum((uint16_t*)icmpBuffer, 12 + dataLength);
-    memcpy(icmpBuffer, &icmpHeader, 12);
-
-    if (sendto(socketDescriptor, icmpBuffer, 12 + dataLength, 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0) {
-        cerr << "Failed to send packet" << endl;
+    if (sendto(socketDescriptor, icmpBuffer, 8 + dataLength, 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0) {
+        cerr << "Failed to send packet: " << strerror(errno) << endl;
         return false;
     }
 
@@ -353,7 +352,6 @@ int runServer() {
     // close packet capture handle
     pcap_close(handle);
 
-
     // after receiving packet send ICMP ping response
     // decrypt packet and save file
 
@@ -369,10 +367,19 @@ int runClient(string fileToTransfer, string receiverAddress) {
         return EXIT_FAILURE;
     }
 
+    stringstream dataToSend;
+    ifstream fileStream(fileToTransfer);
+    dataToSend << fileStream.rdbuf();
+
+    int fileLength = dataToSend.tellp();
+
+    cout << "File length: " << fileLength << endl;
+
     // parse receiver address, if it's a hostname, translate it to IP address
     struct sockaddr_in addressIn;
+    addressIn.sin_family = AF_INET;
 
-    if (inet_pton(AF_INET, receiverAddress.c_str(), &(addressIn.sin_addr))) {
+    if (inet_pton(AF_INET, receiverAddress.c_str(), &addressIn.sin_addr)) {
         cout << "IP adress valid: " << receiverAddress << endl;
     }
     else {
@@ -385,15 +392,13 @@ int runClient(string fileToTransfer, string receiverAddress) {
             struct in_addr **addr_list = (struct in_addr**)record->h_addr_list;
 
 
-            if (inet_pton(AF_INET, inet_ntoa(*addr_list[0]), &(addressIn.sin_addr))) {
+            if (inet_pton(AF_INET, inet_ntoa(*addr_list[0]), &addressIn.sin_addr)) {
                 cout << "Hostname translated to: " << inet_ntoa(*addr_list[0]) << endl;
             }
         }
     }
 
-    char data[10] = {4,3,2,1,0};
-
-    sendIcmpPacket(&addressIn, data, 4);
+    sendIcmpPacket(&addressIn, dataToSend.str().c_str(), fileLength);
     // encrypt file and send it using ICMP ping requests
 
     return EXIT_SUCCESS;
