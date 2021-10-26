@@ -5,4 +5,4 @@ clean:
 	rm -f secret xoleks00.tar
 
 pack:
-	tar -cf xoleks00.tar * 
+	tar -cf xoleks00.tar *

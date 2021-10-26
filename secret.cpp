@@ -21,13 +21,13 @@
 #include <netinet/ip.h>
 #include <netdb.h>
 
-#include <openssl/conf.h>
-#include <openssl/evp.h>
-#include <openssl/err.h>
+#include <openssl/aes.h>
 
 #include <pcap/pcap.h>
 
 using namespace std;
+
+#define XLOGIN "xoleks00"
 
 // we are considering max frame size of Ethernet
 #define MAX_IP_DATAGRAM_SIZE 1500
@@ -89,10 +89,35 @@ void printPacketData(u_char* payload, u_int payloadLength) {
     cout << endl;
 }
 
-void handleErrors(void)
-{
-    ERR_print_errors_fp(stderr);
-    abort();
+unsigned char* encrypt(string s) {
+	AES_KEY encryptKey;
+	AES_set_encrypt_key((const unsigned char*)XLOGIN, 128, &encryptKey);
+
+	string padding(16 - (s.length() % 16), ' ');
+	s = s + padding;
+
+	unsigned char *outputBuffer = (unsigned char*)calloc(((s.length() + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE, 1);
+
+	for (size_t i = 0; i < s.length(); i += 16) {
+		AES_encrypt((const unsigned char*)s.c_str() + i, outputBuffer + i, &encryptKey);
+	}
+
+	return (unsigned char*)outputBuffer;
+}
+
+string decrypt(unsigned char* s) {
+	AES_KEY decryptKey;
+	AES_set_decrypt_key((const unsigned char*)XLOGIN, 128, &decryptKey);
+
+	unsigned char *outputBuffer = (unsigned char*)calloc(strlen((char*)s) + (AES_BLOCK_SIZE % strlen((char*)s)), 1);
+
+	for (size_t i = 0; i < strlen((char*)s); i += 16) {
+		AES_decrypt((const unsigned char*)s + i, outputBuffer + i, &decryptKey);
+	}
+
+	string out((char*)outputBuffer);
+
+	return out;
 }
 
 // ICMP checksum according to RFC 792
@@ -231,49 +256,6 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
             return;
         }
     }
-}
-
-int encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *iv, unsigned char *ciphertext) {
-    EVP_CIPHER_CTX *ctx;
-
-    int len;
-
-    int ciphertext_len;
-
-    /* Create and initialise the context */
-    if(!(ctx = EVP_CIPHER_CTX_new()))
-        handleErrors();
-
-    /*
-     * Initialise the encryption operation. IMPORTANT - ensure you use a key
-     * and IV size appropriate for your cipher
-     * In this example we are using 256 bit AES (i.e. a 256 bit key). The
-     * IV size for *most* modes is the same as the block size. For AES this
-     * is 128 bits
-     */
-    if(1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv))
-        handleErrors();
-
-    /*
-     * Provide the message to be encrypted, and obtain the encrypted output.
-     * EVP_EncryptUpdate can be called multiple times if necessary
-     */
-    if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len))
-        handleErrors();
-    ciphertext_len = len;
-
-    /*
-     * Finalise the encryption. Further ciphertext bytes may be written at
-     * this stage.
-     */
-    if(1 != EVP_EncryptFinal_ex(ctx, ciphertext + len, &len))
-        handleErrors();
-    ciphertext_len += len;
-
-    /* Clean up */
-    EVP_CIPHER_CTX_free(ctx);
-
-    return ciphertext_len;
 }
 
 int runServer() {
