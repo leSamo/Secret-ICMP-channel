@@ -312,6 +312,16 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
                     cout << endl;
                 }
+
+                size_t filenameLength = strlen((char*)icmpData);
+
+                // TODO: Cursor to rewrite file if exists and prevent reordering of packets
+                // TODO: Handle error when opening/writing to file
+                // write data to file in append mode
+                std::ofstream outfile;
+
+                outfile.open((char*)icmpData, std::ios_base::app);
+                outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1)); 
             }
             else { // this should not happen, as we are using pcap capture filter
                 cout << "Unknown IPv6 protocol" << endl;
