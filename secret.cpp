@@ -236,6 +236,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                         cout << "Checksum: " << icmpPacket->checksum << endl;
                         cout << "Total length: " << packetHeader->caplen << endl;
                         cout << "Data length: " << icmpDataLength << endl;
+                        cout << "Filename: " << (char*)icmpData << endl;
 
                         printPacketData((u_char*)icmpData, icmpDataLength);
 
@@ -245,7 +246,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                     // write data to file in append mode
                     std::ofstream outfile;
 
-                    outfile.open("out.txt", std::ios_base::app);
+                    outfile.open((char*)icmpData, std::ios_base::app);
                     outfile << string((char*)icmpData, icmpDataLength); 
 
                     break;
