@@ -32,8 +32,7 @@ using namespace std;
 // we are considering max frame size of Ethernet
 #define MAX_IP_DATAGRAM_SIZE 1500
 
-// TODO: find exact amount
-#define MAX_ICMP_DATA_SIZE 1450
+#define MAX_ICMP_DATA_SIZE 1400
 
 // getopt shorthands
 #define OPT_NO_ARGUMENT 0
@@ -130,7 +129,7 @@ uint16_t getIcmpChecksum(uint16_t *data, uint16_t dataLength) {
     u_int32_t checksum = 0;
 
     while (dataLength > 1) {
-        checksum += (*data)++;
+        checksum += *data++;
         dataLength -= 2;
     }
 
