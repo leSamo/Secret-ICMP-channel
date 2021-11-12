@@ -17,8 +17,8 @@
 #include <arpa/inet.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/ip.h>
+#include <netinet/ip6.h>
 #include <netinet/ether.h>
-#include <netinet/ip.h>
 #include <netdb.h>
 
 #include <openssl/aes.h>
@@ -37,7 +37,7 @@ using namespace std;
 #define OPT_REQUIRED_ARGUMENT 1 
 #define OPT_OPTIONAL_ARGUMENT 2
 
-#define PCAP_FILTER "icmp"
+#define PCAP_FILTER "icmp or icmp6"
 #define PCAP_INTERFACE "enp0s3"
 
 bool verbose = false;
@@ -223,41 +223,71 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 cout << "Protocol: " << static_cast<int16_t>(headerIPv4->protocol) << endl;
             }
 
-            switch (headerIPv4->protocol) {
-                case IPPROTO_ICMP: {
-                    struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
+            if (headerIPv4->protocol == IPPROTO_ICMP) {
+                struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
 
-                    u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
-                    u_char* icmpData = (u_char*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
+                u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
+                u_char* icmpData = (u_char*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
 
-                    if (verbose) {
-                        cout << "Type: " << static_cast<int16_t>(icmpPacket->type) << endl;
-                        cout << "Code: " << static_cast<int16_t>(icmpPacket->code) << endl;
-                        cout << "Checksum: " << icmpPacket->checksum << endl;
-                        cout << "Total length: " << packetHeader->caplen << endl;
-                        cout << "Data length: " << icmpDataLength << endl;
-                        cout << "Filename: " << (char*)icmpData << endl;
+                if (verbose) {
+                    cout << "Type: " << static_cast<int16_t>(icmpPacket->type) << endl;
+                    cout << "Code: " << static_cast<int16_t>(icmpPacket->code) << endl;
+                    cout << "Checksum: " << icmpPacket->checksum << endl;
+                    cout << "Total length: " << packetHeader->caplen << endl;
+                    cout << "Data length: " << icmpDataLength << endl;
+                    cout << "Filename: " << (char*)icmpData << endl;
 
-                        printPacketData((u_char*)icmpData, icmpDataLength);
+                    printPacketData((u_char*)icmpData, icmpDataLength);
 
-                        cout << endl;
-                    }
-
-                    // write data to file in append mode
-                    std::ofstream outfile;
-
-                    outfile.open((char*)icmpData, std::ios_base::app);
-                    outfile << string((char*)icmpData, icmpDataLength); 
-
-                    break;
+                    cout << endl;
                 }
-                default: { // this should not happen, as we are using pcap capture filter
-                    cout << "Unknown protocol" << endl;
-                    return;
-                }
+
+                size_t filenameLength = strlen((char*)icmpData);
+
+                // TODO: Cursor to rewrite file if exists and prevent reordering of packets
+                // TODO: Handle error when opening/writing to file
+                // write data to file in append mode
+                std::ofstream outfile;
+
+                outfile.open((char*)icmpData, std::ios_base::app);
+                outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1)); 
             }
-            break;
+            else {
+                cout << "Unknown IPv4 protocol" << endl;
+            }
         }
+        break;
+
+        case ETHERTYPE_IPV6: { 
+            // remove ethernet header from packet
+            struct ip6_hdr *headerIPv6 = (struct ip6_hdr*)(payload + ETH_HLEN);
+
+            // parse IPv6 addresses to notation with :
+            in6_addr inDstAddr = {headerIPv6->ip6_dst};
+            in6_addr inSrcAddr = {headerIPv6->ip6_src};
+
+            char addr[INET6_ADDRSTRLEN];
+
+            inet_ntop(AF_INET6, &inDstAddr, addr, INET6_ADDRSTRLEN);
+            destIPaddr = addr;
+
+            inet_ntop(AF_INET6, &inSrcAddr, addr, INET6_ADDRSTRLEN);
+            sourceIPaddr = addr;
+
+            u_int8_t protocol = headerIPv6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
+
+            if (verbose) {
+                cout << " IPv6, protocol: " << protocol;
+            }
+
+            if (protocol == IPPROTO_ICMPV6) {
+
+            }
+            else { // this should not happen, as we are using pcap capture filter
+                cout << "Unknown IPv6 protocol" << endl;
+            }
+        }
+        break;
         
         default: { // this should not happen, as we are using pcap capture filter
             cout << "Unknown Ethertype" << endl;
