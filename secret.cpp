@@ -38,6 +38,7 @@ using namespace std;
 #define OPT_REQUIRED_ARGUMENT 1 
 #define OPT_OPTIONAL_ARGUMENT 2
 
+#define PCAP_BUFFER_SIZE 0x10000000
 #define PCAP_FILTER "icmp or icmp6"
 #define PCAP_INTERFACE "enp0s3"
 
@@ -196,7 +197,7 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
         return false;
     }
 
-    cout << "Successfully sent echo request" << endl;
+    verbose && cout << "Successfully sent echo request" << endl;
     return true;
 }
   
@@ -337,6 +338,8 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 }
 
 int runServer() {
+    verbose && cout << "Running as server" << endl;
+
     // use pcap to listen for ICMP ping requests
     char errbuf[PCAP_ERRBUF_SIZE];
     pcap_if_t *interface;
@@ -369,10 +372,10 @@ int runServer() {
     }
 
     // increase buffer size for the received packets, so large files can be received
-    retval = pcap_set_buffer_size(handle, 512 * 1024 * 1024);
+    retval = pcap_set_buffer_size(handle, PCAP_BUFFER_SIZE);
 
     if (retval != 0) {
-        pcap_perror(handle, "Error enabling setting pcap buffer size");
+        pcap_perror(handle, "Error setting pcap buffer size");
         pcap_close(handle);
         return EXIT_FAILURE;
     }
@@ -428,6 +431,8 @@ int runServer() {
 }
 
 int runClient(string fileToTransfer, string receiverAddress) {
+    verbose && cout << "File to transfer: " << optarg << endl;
+    verbose && cout << "Receiver address: " << optarg << endl;
     // check whether file exists and is accessible
     struct stat fileInfo;
 
@@ -443,7 +448,7 @@ int runClient(string fileToTransfer, string receiverAddress) {
 
     // get file length
     int fileLength = dataToSend.tellp();
-    cout << "File length: " << fileLength << endl;
+    verbose && cout << "File length: " << fileLength << endl;
 
     // get filename from path
     string filename = fileToTransfer;
@@ -454,7 +459,7 @@ int runClient(string fileToTransfer, string receiverAddress) {
         filename.erase(0, lastSlashIndex + 1);
     }
 
-    cout << "Filename: " << filename << endl;
+    verbose && cout << "Filename: " << filename << endl;
 
     // parse receiver address, if it's a hostname, translate it to IP address
     struct sockaddr_in addressIn;
@@ -466,11 +471,11 @@ int runClient(string fileToTransfer, string receiverAddress) {
     bool usingIPv6 = false;
 
     if (inet_pton(AF_INET, receiverAddress.c_str(), &addressIn.sin_addr)) {
-        cout << "IPv4 adress valid: " << receiverAddress << endl;
+        verbose && cout << "IPv4 address valid: " << receiverAddress << endl;
     }
     else if (inet_pton(AF_INET6, receiverAddress.c_str(), &addressIn6.sin6_addr)) {
         usingIPv6 = true;
-        cout << "IPv6 adress valid: " << receiverAddress << endl;
+        verbose && cout << "IPv6 address valid: " << receiverAddress << endl;
     }
     else {
         hostent *record = gethostbyname(receiverAddress.c_str());
@@ -483,14 +488,14 @@ int runClient(string fileToTransfer, string receiverAddress) {
             struct in_addr **addr_list = (struct in_addr**)record->h_addr_list;
 
             if (inet_pton(AF_INET, inet_ntoa(*addr_list[0]), &addressIn.sin_addr)) {
-                cout << "Hostname translated to: " << inet_ntoa(*addr_list[0]) << endl;
+                verbose && cout << "Hostname translated to: " << inet_ntoa(*addr_list[0]) << endl;
             }
         }
     }
 
     // split file to segments, encrypt segments and send it using ICMP ping requests
-    for (int segmentIndex = 0; fileLength > 0; segmentIndex++) {       
-        cout << "Remaining bytes: " << fileLength << endl;
+    for (int segmentIndex = 0; fileLength > 0; segmentIndex++) {
+        verbose && cout << "Remaining bytes: " << fileLength << endl;
 
         char dataSlice[MAX_ICMP_DATA_SIZE];
 
@@ -506,6 +511,7 @@ int runClient(string fileToTransfer, string receiverAddress) {
         fileLength -= bytesForData;
     }
 
+    cout << "Successfully sent " << filename << endl;
     return EXIT_SUCCESS;
 }
 
@@ -519,15 +525,12 @@ int main(int argc, char* argv[]) {
     while ((option = getopt(argc, argv, ":r:s:lhv")) != -1) { 
         switch (option) { 
             case 'r':
-                cout << "File to transfer: " << optarg << endl;
                 fileToTransfer = optarg;
                 break;
             case 's':
-                cout << "Receiver address: " << optarg << endl;
                 receiverAddress = optarg;
                 break;
             case 'l':
-                cout << "Running as server" << endl;
                 runAsServer = true;
                 break;
             case 'h':
