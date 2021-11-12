@@ -368,6 +368,15 @@ int runServer() {
         return EXIT_FAILURE;
     }
 
+    // increase buffer size for the received packets, so large files can be received
+    retval = pcap_set_buffer_size(handle, 512 * 1024 * 1024);
+
+    if (retval != 0) {
+        pcap_perror(handle, "Error enabling setting pcap buffer size");
+        pcap_close(handle);
+        return EXIT_FAILURE;
+    }
+
     // activate packet capture handle, returns 0 if successful
     retval = pcap_activate(handle);
 
