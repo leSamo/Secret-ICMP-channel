@@ -262,7 +262,8 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 std::ofstream outfile;
 
                 outfile.open((char*)icmpData, std::ios_base::app);
-                outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1)); 
+                outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1));
+                outfile.close();
             }
             else {
                 cout << "Unknown IPv4 protocol" << endl;
@@ -323,6 +324,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
                 outfile.open((char*)icmpData, std::ios_base::app);
                 outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1)); 
+                outfile.close();
             }
             else { // this should not happen, as we are using pcap capture filter
                 cout << "Unknown IPv6 protocol" << endl;

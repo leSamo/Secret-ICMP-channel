@@ -1,7 +1,7 @@
-import subprocess, string, filecmp, os, time
+import subprocess, string, filecmp, os, time, signal
 
 DELIMETER = "====================\n\n\n"
-WAIT_TIME = 3
+WAIT_TIME = 2
 SERVER_COMMAND = "sudo ./secret -l"
 
 passedCount = 0
@@ -22,19 +22,16 @@ def test(number, description, fileToSend, address):
     if os.path.isfile(receivedFilename):
         os.remove(receivedFilename)
 
-    server = subprocess.Popen(SERVER_COMMAND.split(" "))
+    server = subprocess.Popen(SERVER_COMMAND, shell=True, preexec_fn=os.setsid)
     
     time.sleep(WAIT_TIME)
 
-    subprocess.Popen(f"sudo ./secret -r {fileToSend} -s {address}".split(" "))
+    subprocess.Popen(f"sudo ./secret -r {fileToSend} -s {address}", shell=True)
     
     time.sleep(WAIT_TIME)
-    server.terminate()
+    os.killpg(os.getpgid(server.pid), signal.SIGTERM) 
 
     print(f"TEST {number} - {description}: ", end='')
-    print(os.path.basename(fileToSend))
-
-    print(os.path.isfile(receivedFilename))
 
     if os.path.isfile(receivedFilename) and filecmp.cmp(fileToSend, receivedFilename):
         print(color.GREEN + "PASSED" + color.RESET)
@@ -46,10 +43,10 @@ def recap():
     print("====================\n")
     print(color.YELLOW + f"PASSED {passedCount}/{allCount}" + color.RESET)
 
-test(1, "it should send tiny plain text file to provided IPv4 loopback address", "test/test1.txt", "127.0.0.1")
+test(1, "it should send tiny plain text file to provided IPv4 local address", "test/test1.txt", "192.168.0.1")
 test(2, "it should send tiny plain text file to provided IPv4 local address", "test/test2.txt", "192.168.0.1")
 test(3, "it should send tiny plain text file to localhost hostname translated to IPv4 address", "test/test3.txt", "192.168.0.1")
-test(4, "it should send tiny plain text file to IPv6 loopback", "test/test4.txt", "::1")
+test(4, "it should send tiny plain text file to IPv6 local address", "test/test4.txt", "fc00::")
 test(5, "it should send tiny image to IPv6 local address", "test/test5.png", "fc00::")
 test(6, "it should send small image in multiple packets", "test/test6.png", "192.168.0.1")
 test(7, "it should send plain text file in multiple packets", "test/test7.txt", "192.168.0.1")
