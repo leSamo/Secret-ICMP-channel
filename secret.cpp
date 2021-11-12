@@ -126,26 +126,23 @@ string decrypt(unsigned char* s) {
 }
 
 // ICMP checksum according to RFC 792
-uint16_t getIcmpChecksum(uint16_t *icmph, int len) {
-	uint16_t ret = 0;
-	uint32_t sum = 0;
-	uint16_t odd_byte;
-	
-	while (len > 1) {
-		sum += *icmph++;
-		len -= 2;
-	}
-	
-	if (len == 1) {
-		*(uint8_t*)(&odd_byte) = * (uint8_t*)icmph;
-		sum += odd_byte;
-	}
-	
-	sum =  (sum >> 16) + (sum & 0xffff);
-	sum += (sum >> 16);
-	ret =  ~sum;
-	
-	return ret; 
+uint16_t getIcmpChecksum(uint16_t *data, uint16_t dataLength) {
+    u_int32_t checksum = 0;
+
+    while (dataLength > 1) {
+        checksum += (*data)++;
+        dataLength -= 2;
+    }
+
+    if (dataLength == 1) {
+        checksum += *(u_int8_t*)data;
+    }
+
+    checksum = (checksum & 0xffff) + (checksum >> 16);
+    checksum += checksum >> 16;
+    checksum = ~checksum;
+
+    return (uint16_t)checksum;
 }
 
 bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLength) {
@@ -358,7 +355,7 @@ int runClient(string fileToTransfer, string receiverAddress) {
     struct stat fileInfo;
 
     if (stat(fileToTransfer.c_str(), &fileInfo)) {
-        cerr << "File to transfer is inaccessible" << endl;
+        cerr << "File to transfer does not exist or is inaccessible" << endl;
         return EXIT_FAILURE;
     }
 
