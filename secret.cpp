@@ -32,6 +32,9 @@ using namespace std;
 // we are considering max frame size of Ethernet
 #define MAX_IP_DATAGRAM_SIZE 1500
 
+// TODO: find exact amount
+#define MAX_ICMP_DATA_SIZE 1450
+
 // getopt shorthands
 #define OPT_NO_ARGUMENT 0
 #define OPT_REQUIRED_ARGUMENT 1 
@@ -47,14 +50,16 @@ void printHelp() {
     cout << "Encrypts and transfers file over a secure channel" << endl;
     cout << "Usage: ./secret -r <file> -s <ip|hostname> [-l]" << endl;
     cout << "Options:" << endl;
-    cout << "  -r <file>             file to transfer" << endl;
-    cout << "  -s <ip|hostname>      IP address/hostname where to send the file" << endl;
-    cout << "  -l                    run as server, which listens to incoming ICMP messages and receives files" << endl;
-    cout << "  -h                    show help" << endl;
-    cout << "  -v                    verbose output, log additional debug info" << endl;
+    cout << "  -r <file>          file to transfer" << endl;
+    cout << "  -s <ip|hostname>   IP address/hostname where to send the file" << endl;
+    cout << "  -l                 run as server, which listens to incoming ICMP messages and receives files" << endl;
+    cout << "  -h                 show help" << endl;
+    cout << "  -v                 verbose output, log additional debug info" << endl;
 }
 
 void printPacketData(u_char* payload, u_int payloadLength) {
+    cout << "Payload:";
+
     stringstream byteAsCharSS;
 
     // print every byte of payload twice, once as hex and one as a char
@@ -193,8 +198,6 @@ bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLen
   
 // callback function to print info about every captured packet
 void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_char* payload) {
-    cout << endl << endl;
-
     // split ethernet header into its corresponding fields
     ether_header *headerEthernet = (ether_header*)payload;
     string destMac = ether_ntoa((ether_addr*) headerEthernet->ether_dhost);
@@ -215,12 +218,12 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
             // header lenght is in rows of 4 bytes, multiply by 4 to get length in bytes
             ipv4HeaderLengthInBytes = headerIPv4->ihl << 2;
 
-            // convert addresses to notation with :
+            // convert addresses to human readable format
             sourceIPaddr = inet_ntoa(in_addr {headerIPv4->saddr});
             destIPaddr = inet_ntoa(in_addr {headerIPv4->daddr});
 
-            if (true) {
-                cout << "IPv4" << endl;
+            if (verbose) {
+                cout << "IP version: 4" << endl;
                 cout << sourceIPaddr << " > " << destIPaddr << endl;
                 cout << "IHL: " << ipv4HeaderLengthInBytes << endl;
                 cout << "Protocol: " << static_cast<int16_t>(headerIPv4->protocol) << endl;
@@ -230,20 +233,30 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 case IPPROTO_ICMP: {
                     struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
 
-                    cout << "Type: " << static_cast<int16_t>(icmpPacket->type) << endl;
-                    cout << "Code: " << static_cast<int16_t>(icmpPacket->code) << endl;
-                    cout << "Checksum: " << icmpPacket->checksum << endl;
-
                     u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
                     u_char* icmpData = (u_char*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
 
-                    cout << "Total length: " << packetHeader->caplen << endl;
-                    cout << "Data length: " << icmpDataLength << endl;
-                    printPacketData((u_char*)icmpData, icmpDataLength);
+                    if (verbose) {
+                        cout << "Type: " << static_cast<int16_t>(icmpPacket->type) << endl;
+                        cout << "Code: " << static_cast<int16_t>(icmpPacket->code) << endl;
+                        cout << "Checksum: " << icmpPacket->checksum << endl;
+                        cout << "Total length: " << packetHeader->caplen << endl;
+                        cout << "Data length: " << icmpDataLength << endl;
+
+                        printPacketData((u_char*)icmpData, icmpDataLength);
+
+                        cout << endl;
+                    }
+
+                    // write data to file in append mode
+                    std::ofstream outfile;
+
+                    outfile.open("out.txt", std::ios_base::app);
+                    outfile << string((char*)icmpData, icmpDataLength); 
 
                     break;
                 }
-                default: { // unsupported protocol
+                default: { // this should not happen, as we are using pcap capture filter
                     cout << "Unknown protocol" << endl;
                     return;
                 }
@@ -251,7 +264,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
             break;
         }
         
-        default: { // unsupported ethertype
+        default: { // this should not happen, as we are using pcap capture filter
             cout << "Unknown Ethertype" << endl;
             return;
         }
@@ -380,7 +393,15 @@ int runClient(string fileToTransfer, string receiverAddress) {
         }
     }
 
-    sendIcmpPacket(&addressIn, dataToSend.str().c_str(), fileLength);
+    while (fileLength > 0) {
+        cout << "Remaining bytes: " << fileLength << endl;
+        char dataSlice[MAX_ICMP_DATA_SIZE];
+        dataToSend.read(dataSlice, MAX_ICMP_DATA_SIZE);
+        
+        sendIcmpPacket(&addressIn, dataSlice, min(fileLength, MAX_ICMP_DATA_SIZE));
+
+        fileLength -= MAX_ICMP_DATA_SIZE;
+    }
     // encrypt file and send it using ICMP ping requests
 
     return EXIT_SUCCESS;
@@ -404,7 +425,7 @@ int main(int argc, char* argv[]) {
                 receiverAddress = optarg;
                 break;
             case 'l':
-                cout << "Run as server" << endl;
+                cout << "Running as server" << endl;
                 runAsServer = true;
                 break;
             case 'h':
@@ -424,7 +445,8 @@ int main(int argc, char* argv[]) {
 
     // check whether all mandatory options were used (either -l or both -r and -s)
     if (!runAsServer && (fileToTransfer.empty() || receiverAddress.empty())) {
-        cerr << "Missing required arguments, either use -l to run as server or provide both -r and -s" << endl;
+        cerr << "Missing required arguments, either use -l to run as server or provide both -r and -s to run as client" << endl;
+        return EXIT_FAILURE;
     }
 
     if (runAsServer) {
