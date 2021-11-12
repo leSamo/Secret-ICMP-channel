@@ -142,19 +142,28 @@ uint16_t getIcmpChecksum(uint16_t *data, uint16_t dataLength) {
     return (uint16_t)checksum;
 }
 
-bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLength, uint16_t sequenceNumber) {
+bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLength, uint16_t sequenceNumber) {
     const uint8_t TTL = 255;
 
-    int socketDescriptor = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP);
+    int socketDescriptor;
+
+    if (ipv6) {
+        socketDescriptor = socket(PF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+    }
+    else {
+        socketDescriptor = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP);
+    }
 
     if (socketDescriptor < 0) {
         cerr << "Failed to open socket" << endl;
         return false;
     }
 
-    if (setsockopt(socketDescriptor, SOL_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
-        cerr << "Failed to set TTL option" << endl;
-        return false;
+    if (!ipv6) {
+        if (setsockopt(socketDescriptor, SOL_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
+            cerr << "Failed to set TTL option" << endl;
+            return false;
+        }
     }
 
     if (fcntl(socketDescriptor, F_SETFL, O_NONBLOCK) != 0 ) {
@@ -181,7 +190,7 @@ bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLen
     icmpHeader.icmp_cksum = getIcmpChecksum((uint16_t*)icmpBuffer, 8 + dataLength);
     memcpy(icmpBuffer, &icmpHeader, 8);
 
-    if (sendto(socketDescriptor, icmpBuffer, 8 + dataLength, 0, (struct sockaddr*)addr, sizeof(*addr)) <= 0) {
+    if (sendto(socketDescriptor, icmpBuffer, 8 + dataLength, 0, addr, ipv6 ? sizeof(*((struct sockaddr_in6*)addr)) : sizeof(*((struct sockaddr_in*)addr))) <= 0) {
         cerr << "Failed to send packet: " << strerror(errno) << endl;
         return false;
     }
@@ -225,6 +234,10 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
             if (headerIPv4->protocol == IPPROTO_ICMP) {
                 struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
+
+                if (icmpPacket->un.echo.id != IDENTIFICATION) {
+                    return;
+                }
 
                 u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
                 u_char* icmpData = (u_char*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
@@ -364,7 +377,7 @@ int runServer() {
     }
 
     // capture -n packets with all supplied filters active, upon packet capture, invoke handlePacket function
-    pcap_loop(handle, 5, capturePacket, NULL);
+    pcap_loop(handle, 0, capturePacket, NULL);
 
     // free filter program
     pcap_freecode(&filter);
@@ -398,6 +411,7 @@ int runClient(string fileToTransfer, string receiverAddress) {
 
     // get filename from path
     string filename = fileToTransfer;
+
     const size_t lastSlashIndex = fileToTransfer.find_last_of("\\/");
 
     if (string::npos != lastSlashIndex) {
@@ -410,14 +424,24 @@ int runClient(string fileToTransfer, string receiverAddress) {
     struct sockaddr_in addressIn;
     addressIn.sin_family = AF_INET;
 
+    struct sockaddr_in6 addressIn6;
+    addressIn6.sin6_family = AF_INET6;
+
+    bool usingIPv6 = false;
+
     if (inet_pton(AF_INET, receiverAddress.c_str(), &addressIn.sin_addr)) {
-        cout << "IP adress valid: " << receiverAddress << endl;
+        cout << "IPv4 adress valid: " << receiverAddress << endl;
+    }
+    else if (inet_pton(AF_INET6, receiverAddress.c_str(), &addressIn6.sin6_addr)) {
+        usingIPv6 = true;
+        cout << "IPv6 adress valid: " << receiverAddress << endl;
     }
     else {
         hostent *record = gethostbyname(receiverAddress.c_str());
 
         if (record == nullptr) {
             cerr << "Invalid hostname: " << receiverAddress << endl;
+            return EXIT_FAILURE;
         }
         else {
             struct in_addr **addr_list = (struct in_addr**)record->h_addr_list;
@@ -441,7 +465,7 @@ int runClient(string fileToTransfer, string receiverAddress) {
 
         dataToSend.read(dataSlice + filename.length() + 1, bytesForData);
         
-        sendIcmpPacket(&addressIn, dataSlice, min((int)(fileLength + filename.length() + 1), MAX_ICMP_DATA_SIZE), segmentIndex);
+        sendIcmpPacket(usingIPv6 ? (struct sockaddr*)&addressIn6 : (struct sockaddr*)&addressIn, usingIPv6, dataSlice, min((int)(fileLength + filename.length() + 1), MAX_ICMP_DATA_SIZE), segmentIndex);
 
         fileLength -= bytesForData;
     }
