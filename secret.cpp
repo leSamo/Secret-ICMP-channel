@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/icmp6.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/ether.h>
@@ -225,13 +226,6 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
             sourceIPaddr = inet_ntoa(in_addr {headerIPv4->saddr});
             destIPaddr = inet_ntoa(in_addr {headerIPv4->daddr});
 
-            if (verbose) {
-                cout << "IP version: 4" << endl;
-                cout << sourceIPaddr << " > " << destIPaddr << endl;
-                cout << "IHL: " << ipv4HeaderLengthInBytes << endl;
-                cout << "Protocol: " << static_cast<int16_t>(headerIPv4->protocol) << endl;
-            }
-
             if (headerIPv4->protocol == IPPROTO_ICMP) {
                 struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
 
@@ -243,6 +237,10 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 u_char* icmpData = (u_char*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
 
                 if (verbose) {
+                    cout << "IP version: 4" << endl;
+                    cout << sourceIPaddr << " > " << destIPaddr << endl;
+                    cout << "IHL: " << ipv4HeaderLengthInBytes << endl;
+                    cout << "Protocol: " << static_cast<int16_t>(headerIPv4->protocol) << endl;
                     cout << "Type: " << static_cast<int16_t>(icmpPacket->type) << endl;
                     cout << "Code: " << static_cast<int16_t>(icmpPacket->code) << endl;
                     cout << "Checksum: " << icmpPacket->checksum << endl;
@@ -289,12 +287,31 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
             u_int8_t protocol = headerIPv6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
 
-            if (verbose) {
-                cout << " IPv6, protocol: " << protocol;
-            }
-
             if (protocol == IPPROTO_ICMPV6) {
+                struct icmp6_hdr *icmpPacket = (struct icmp6_hdr*)(payload + ETH_HLEN + 40);
+                
+                if (icmpPacket->icmp6_dataun.icmp6_un_data16[0] != IDENTIFICATION) {
+                    return;
+                }
 
+                u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + 40 + sizeof(struct icmphdr));
+                u_char* icmpData = (u_char*)(payload + ETH_HLEN + 40 + sizeof(struct icmphdr));
+
+                if (verbose) {
+                    cout << "IP version: 6" << endl;
+                    cout << sourceIPaddr << " > " << destIPaddr << endl;
+                    cout << "Protocol: " << static_cast<int16_t>(protocol) << endl;
+                    cout << "Type: " << static_cast<int16_t>(icmpPacket->icmp6_type) << endl;
+                    cout << "Code: " << static_cast<int16_t>(icmpPacket->icmp6_code) << endl;
+                    cout << "Checksum: " << icmpPacket->icmp6_cksum << endl;
+                    cout << "Total length: " << packetHeader->caplen << endl;
+                    cout << "Data length: " << icmpDataLength << endl;
+                    cout << "Filename: " << (char*)icmpData << endl;
+
+                    printPacketData((u_char*)icmpData, icmpDataLength);
+
+                    cout << endl;
+                }
             }
             else { // this should not happen, as we are using pcap capture filter
                 cout << "Unknown IPv6 protocol" << endl;
