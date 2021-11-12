@@ -28,9 +28,7 @@
 using namespace std;
 
 #define XLOGIN "xoleks00"
-
-// we are considering max frame size of Ethernet
-#define MAX_IP_DATAGRAM_SIZE 1500
+#define IDENTIFICATION 0x85ac
 
 #define MAX_ICMP_DATA_SIZE 1400
 
@@ -144,8 +142,8 @@ uint16_t getIcmpChecksum(uint16_t *data, uint16_t dataLength) {
     return (uint16_t)checksum;
 }
 
-bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLength) {
-    uint8_t ttl = 255;
+bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLength, uint16_t sequenceNumber) {
+    const uint8_t TTL = 255;
 
     int socketDescriptor = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP);
 
@@ -154,7 +152,7 @@ bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLen
         return false;
     }
 
-    if (setsockopt(socketDescriptor, SOL_IP, IP_TTL, &ttl, sizeof(ttl)) != 0) {
+    if (setsockopt(socketDescriptor, SOL_IP, IP_TTL, &TTL, sizeof(TTL)) != 0) {
         cerr << "Failed to set TTL option" << endl;
         return false;
     }
@@ -170,8 +168,8 @@ bool sendIcmpPacket(struct sockaddr_in *addr, const char* data, uint16_t dataLen
     icmpHeader.icmp_type = ICMP_ECHO;
     icmpHeader.icmp_code = 0;
     icmpHeader.icmp_cksum = 0;
-    icmpHeader.icmp_id = 0;
-    icmpHeader.icmp_seq = 0;
+    icmpHeader.icmp_id = IDENTIFICATION;
+    icmpHeader.icmp_seq = sequenceNumber;
 
     // fill in ICMP data
     u_int8_t icmpBuffer[1500];
@@ -358,13 +356,24 @@ int runClient(string fileToTransfer, string receiverAddress) {
         return EXIT_FAILURE;
     }
 
+    // read file data
     stringstream dataToSend;
     ifstream fileStream(fileToTransfer);
     dataToSend << fileStream.rdbuf();
 
+    // get file length
     int fileLength = dataToSend.tellp();
-
     cout << "File length: " << fileLength << endl;
+
+    // get filename from path
+    string filename = fileToTransfer;
+    const size_t lastSlashIndex = fileToTransfer.find_last_of("\\/");
+
+    if (string::npos != lastSlashIndex) {
+        filename.erase(0, lastSlashIndex + 1);
+    }
+
+    cout << "Filename: " << filename << endl;
 
     // parse receiver address, if it's a hostname, translate it to IP address
     struct sockaddr_in addressIn;
@@ -382,23 +391,29 @@ int runClient(string fileToTransfer, string receiverAddress) {
         else {
             struct in_addr **addr_list = (struct in_addr**)record->h_addr_list;
 
-
             if (inet_pton(AF_INET, inet_ntoa(*addr_list[0]), &addressIn.sin_addr)) {
                 cout << "Hostname translated to: " << inet_ntoa(*addr_list[0]) << endl;
             }
         }
     }
 
-    while (fileLength > 0) {
+    // split file to segments, encrypt segments and send it using ICMP ping requests
+    for (int segmentIndex = 0; fileLength > 0; segmentIndex++) {       
         cout << "Remaining bytes: " << fileLength << endl;
-        char dataSlice[MAX_ICMP_DATA_SIZE];
-        dataToSend.read(dataSlice, MAX_ICMP_DATA_SIZE);
-        
-        sendIcmpPacket(&addressIn, dataSlice, min(fileLength, MAX_ICMP_DATA_SIZE));
 
-        fileLength -= MAX_ICMP_DATA_SIZE;
+        char dataSlice[MAX_ICMP_DATA_SIZE];
+
+        int bytesForData = MAX_ICMP_DATA_SIZE - filename.length() - 1;
+
+        memcpy(dataSlice, filename.c_str(), filename.length());
+        dataSlice[filename.length()] = '\0';
+
+        dataToSend.read(dataSlice + filename.length() + 1, bytesForData);
+        
+        sendIcmpPacket(&addressIn, dataSlice, min((int)(fileLength + filename.length() + 1), MAX_ICMP_DATA_SIZE), segmentIndex);
+
+        fileLength -= bytesForData;
     }
-    // encrypt file and send it using ICMP ping requests
 
     return EXIT_SUCCESS;
 }
