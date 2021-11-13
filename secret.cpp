@@ -28,15 +28,10 @@
 
 using namespace std;
 
-#define XLOGIN "xoleks00xoleks00"
-#define IDENTIFICATION 0xdac
+#define XLOGIN "xoleks00xoleks00"               // AES encryption/decryption key
+#define IDENTIFICATION 0xdac                    // bytes for ICMP ping identification field
 
-#define MAX_ICMP_DATA_SIZE 1392 // must be divisible by AES_BLOCK_SIZE
-
-// getopt shorthands
-#define OPT_NO_ARGUMENT 0
-#define OPT_REQUIRED_ARGUMENT 1 
-#define OPT_OPTIONAL_ARGUMENT 2
+#define MAX_ICMP_DATA_SIZE 1392                 // must be divisible by AES_BLOCK_SIZE
 
 #define PCAP_BUFFER_SIZE 0x10000000
 #define PCAP_FILTER "icmp or icmp6"
@@ -44,7 +39,7 @@ using namespace std;
 
 bool verbose = false;
 
-// print summary and option list when user enters -h or --help option
+// print summary and option list when user enters -h option
 void printHelp() {
     cout << "Encrypts and transfers file over a secure channel" << endl;
     cout << "Usage: ./secret -r <file> -s <ip|hostname> [-l]" << endl;
@@ -56,12 +51,13 @@ void printHelp() {
     cout << "  -v                 verbose output, log additional debug info" << endl;
 }
 
+// print bytes in human readable format - each hextet on separate line in both hex and ascii side-by-side
 void printPacketData(u_char* payload, u_int payloadLength) {
     cout << "Payload:";
 
     stringstream byteAsCharSS;
 
-    // print every byte of payload twice, once as hex and one as a char
+    // print every byte of payload twice, once as hex and one as ascii
     for (u_int i = 0; i < payloadLength; i++) {
         // every 16 bytes print buffered payload bytes as chars and print offset for next line
         if (i % 16 == 0) {
@@ -93,45 +89,50 @@ void printPacketData(u_char* payload, u_int payloadLength) {
     cout << endl;
 }
 
-char* encrypt(char *s, size_t length) {
+// use AES 128 CBC to encrypt buffer of bytes of length divisible by 16
+char* encrypt(char *buffer, size_t length) {
 	AES_KEY encryptKey;
 	AES_set_encrypt_key((const unsigned char*)XLOGIN, 128, &encryptKey);
 
 	unsigned char *outputBuffer = (unsigned char*)calloc(length, 1);
 
 	for (size_t i = 0; i < length; i += 16) {
-		AES_encrypt((const unsigned char*)s + i, outputBuffer + i, &encryptKey);
+		AES_encrypt((const unsigned char*)buffer + i, outputBuffer + i, &encryptKey);
 	}
 
 	return (char*)outputBuffer;
 }
 
-char* decrypt(char* s, size_t length) {
+// use AES 128 CBC to decrypt buffer of bytes of length divisible by 16
+char* decrypt(char *buffer, size_t length) {
 	AES_KEY decryptKey;
 	AES_set_decrypt_key((const unsigned char*)XLOGIN, 128, &decryptKey);
 
-	unsigned char *outputBuffer = (unsigned char*)calloc(length + (AES_BLOCK_SIZE % length), 1);
+	unsigned char *outputBuffer = (unsigned char*)calloc(length, 1);
 
 	for (size_t i = 0; i < length; i += 16) {
-		AES_decrypt((const unsigned char*)s + i, outputBuffer + i, &decryptKey);
+		AES_decrypt((const unsigned char*)buffer + i, outputBuffer + i, &decryptKey);
 	}
 
 	return (char*)outputBuffer;
 }
 
-// ICMP checksum according to RFC 792
-uint16_t getIcmpChecksum(uint16_t *data, uint16_t dataLength) {
+// calculate ICMP checksum of buffer according to RFC 792
+uint16_t getIcmpChecksum(uint16_t *buffer, size_t length) {
     u_int32_t checksum = 0;
 
-    while (dataLength > 1) {
-        checksum += *data++;
-        dataLength -= 2;
+    // sum all 16-bit words
+    while (length > 1) {
+        checksum += *buffer++;
+        length -= 2;
     }
 
-    if (dataLength == 1) {
-        checksum += *(u_int8_t*)data;
+    // add the last odd byte if present
+    if (length == 1) {
+        checksum += *(u_int8_t*)buffer;
     }
 
+    // sum higher and lower 16-bit words of checksum and do one's complement
     checksum = (checksum & 0xffff) + (checksum >> 16);
     checksum += checksum >> 16;
     checksum = ~checksum;
@@ -139,6 +140,8 @@ uint16_t getIcmpChecksum(uint16_t *data, uint16_t dataLength) {
     return (uint16_t)checksum;
 }
 
+// create ICMP packet containing data and send it to provided IPv4 or IPv6 address
+// returns true if packet was sent successfully
 bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLength, uint16_t sequenceNumber) {
     const uint8_t TTL = 255;
 
@@ -168,8 +171,10 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
         return false;
     }
 
-    struct icmp icmpHeader;
+    // calculate how many bytes at the end are for AES block padding
     char padding = (AES_BLOCK_SIZE - dataLength % AES_BLOCK_SIZE) % AES_BLOCK_SIZE;
+
+    struct icmp icmpHeader;
 
     // fill in ICMP header metadata
     icmpHeader.icmp_type = ICMP_ECHO;
@@ -185,6 +190,7 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
     memcpy(icmpBuffer, &icmpHeader, 8);
     memcpy(icmpData, data, dataLength + padding);
 
+    // calculate and fill in ICMP checksum
     icmpHeader.icmp_cksum = getIcmpChecksum((uint16_t*)icmpBuffer, 8 + dataLength + padding);
     memcpy(icmpBuffer, &icmpHeader, 8);
 
@@ -197,7 +203,7 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
     return true;
 }
   
-// callback function to print info about every captured packet
+// callback function to receive ICMP messages and save data to file
 void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_char* payload) {
     // split ethernet header into its corresponding fields
     ether_header *headerEthernet = (ether_header*)payload;
@@ -223,15 +229,18 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
             sourceIPaddr = inet_ntoa(in_addr {headerIPv4->saddr});
             destIPaddr = inet_ntoa(in_addr {headerIPv4->daddr});
 
-            if (headerIPv4->protocol == IPPROTO_ICMP) {
+            if (headerIPv4->protocol == IPPROTO_ICMP) { // ICMP
+                // remove IP header from packet
                 struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
 
+                // if packet id does not match, drop it because this packet was not created by correct client
                 if (icmpPacket->un.echo.id >> 4 != IDENTIFICATION) {
                     return;
                 }
 
                 char padding = icmpPacket->un.echo.id & 0xf;
 
+                // remove ICMP header from packet
                 u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
                 u_char* icmpData = (u_char*)decrypt((char*)payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr), icmpDataLength);
 
@@ -257,10 +266,13 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
                 // TODO: Cursor to rewrite file if exists and prevent reordering of packets
                 // TODO: Handle error when opening/writing to file
+                // TODO: Send -first- bit to indicate this is a first file packet and should rewrite existing file
                 // write data to file in append mode
                 std::ofstream outfile;
 
+                // filename is saved at the beginning of icmpData buffer and is separated from data with NULL byte
                 outfile.open((char*)icmpData, std::ios_base::app);
+                // data is in buffer after the NULL byte, make sure not to write encryption padding bytes
                 outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1) - padding);
                 outfile.close();
             }
@@ -288,9 +300,10 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
             u_int8_t protocol = headerIPv6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
 
-            if (protocol == IPPROTO_ICMPV6) {
+            if (protocol == IPPROTO_ICMPV6) { // ICMPv6
                 struct icmp6_hdr *icmpPacket = (struct icmp6_hdr*)(payload + ETH_HLEN + 40);
                 
+                // if packet id does not match, drop it because this packet was not created by correct client
                 if (icmpPacket->icmp6_dataun.icmp6_un_data16[0] >> 4 != IDENTIFICATION) {
                     return;
                 }
