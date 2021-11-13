@@ -31,7 +31,7 @@ using namespace std;
 #define XLOGIN "xoleks00xoleks00"
 #define IDENTIFICATION 0xdac
 
-#define MAX_ICMP_DATA_SIZE 1408 // must be divisible by AES_BLOCK_SIZE
+#define MAX_ICMP_DATA_SIZE 1392 // must be divisible by AES_BLOCK_SIZE
 
 // getopt shorthands
 #define OPT_NO_ARGUMENT 0
@@ -295,8 +295,10 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                     return;
                 }
 
+                char padding = icmpPacket->icmp6_dataun.icmp6_un_data16[0] & 0xf;
+
                 u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + 40 + sizeof(struct icmphdr));
-                u_char* icmpData = (u_char*)(payload + ETH_HLEN + 40 + sizeof(struct icmphdr));
+                u_char* icmpData = (u_char*)decrypt((char*)payload + ETH_HLEN + 40 + sizeof(struct icmphdr), icmpDataLength);
 
                 if (verbose) {
                     cout << "IP version: 6" << endl;
@@ -307,6 +309,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                     cout << "Checksum: " << icmpPacket->icmp6_cksum << endl;
                     cout << "Total length: " << packetHeader->caplen << endl;
                     cout << "Data length: " << icmpDataLength << endl;
+                    cout << "Padding: " << (int)padding << endl;
                     cout << "Filename: " << (char*)icmpData << endl;
 
                     printPacketData((u_char*)icmpData, icmpDataLength);
@@ -322,7 +325,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 std::ofstream outfile;
 
                 outfile.open((char*)icmpData, std::ios_base::app);
-                outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1)); 
+                outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1) - padding); 
                 outfile.close();
             }
             else { // this should not happen, as we are using pcap capture filter
