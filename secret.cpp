@@ -34,7 +34,7 @@ using namespace std;
 #define MAX_ICMP_DATA_SIZE 1392                 // must be divisible by AES_BLOCK_SIZE
 
 #define PCAP_BUFFER_SIZE 0x10000000
-#define PCAP_FILTER "icmp or icmp6"
+#define PCAP_FILTER "icmp[icmptype]=icmp-echo or icmp6[icmp6type]=icmp6-echo"
 #define PCAP_INTERFACE "enp0s3"
 
 bool verbose = false;
@@ -177,7 +177,7 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
     struct icmp icmpHeader;
 
     // fill in ICMP header metadata
-    icmpHeader.icmp_type = ICMP_ECHO;
+    icmpHeader.icmp_type = ipv6 ? ICMP6_ECHO_REQUEST : ICMP_ECHO;
     icmpHeader.icmp_code = 0;
     icmpHeader.icmp_cksum = 0;
     icmpHeader.icmp_id = IDENTIFICATION << 4 | padding;
