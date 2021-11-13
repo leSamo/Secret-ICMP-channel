@@ -169,7 +169,7 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
     }
 
     struct icmp icmpHeader;
-    char padding = dataLength + (AES_BLOCK_SIZE - dataLength % AES_BLOCK_SIZE) % AES_BLOCK_SIZE - dataLength;
+    char padding = (AES_BLOCK_SIZE - dataLength % AES_BLOCK_SIZE) % AES_BLOCK_SIZE;
 
     // fill in ICMP header metadata
     icmpHeader.icmp_type = ICMP_ECHO;
@@ -512,7 +512,9 @@ int runClient(string fileToTransfer, string receiverAddress) {
         size_t dataSliceLengthWithPadding = min(dataLength + (AES_BLOCK_SIZE - dataLength % AES_BLOCK_SIZE) % AES_BLOCK_SIZE, MAX_ICMP_DATA_SIZE);
         size_t dataSliceLength = min((int)(fileLength + filename.length() + 1), MAX_ICMP_DATA_SIZE);
 
-        sendIcmpPacket(usingIPv6 ? (struct sockaddr*)&addressIn6 : (struct sockaddr*)&addressIn, usingIPv6, encrypt(dataSlice, dataSliceLengthWithPadding), dataSliceLength, segmentIndex);
+        if (!sendIcmpPacket(usingIPv6 ? (struct sockaddr*)&addressIn6 : (struct sockaddr*)&addressIn, usingIPv6, encrypt(dataSlice, dataSliceLengthWithPadding), dataSliceLength, segmentIndex)) {
+            return EXIT_FAILURE; 
+        }
 
         fileLength -= bytesForData;
     }
