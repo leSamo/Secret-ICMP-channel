@@ -34,10 +34,12 @@ def test(number, description, fileToSend, address):
 
     if os.path.isfile(receivedFilename) and filecmp.cmp(fileToSend, receivedFilename):
         print(color.GREEN + "PASSED" + color.RESET)
-        os.remove(receivedFilename)
         passedCount += 1
     else:
         print(color.RED + "FAILED" + color.RESET)
+
+    if os.path.isfile(receivedFilename):
+        os.remove(receivedFilename)
 
 def recap():
     print("====================")

@@ -28,7 +28,7 @@
 
 using namespace std;
 
-#define XLOGIN "xoleks00"
+#define XLOGIN "xoleks00xoleks00"
 #define IDENTIFICATION 0x85ac
 
 #define MAX_ICMP_DATA_SIZE 1400
@@ -93,35 +93,30 @@ void printPacketData(u_char* payload, u_int payloadLength) {
     cout << endl;
 }
 
-unsigned char* encrypt(string s) {
+char* encrypt(char *s, size_t length) {
 	AES_KEY encryptKey;
 	AES_set_encrypt_key((const unsigned char*)XLOGIN, 128, &encryptKey);
 
-	string padding(16 - (s.length() % 16), ' ');
-	s = s + padding;
+	unsigned char *outputBuffer = (unsigned char*)calloc((AES_BLOCK_SIZE - length % AES_BLOCK_SIZE) % AES_BLOCK_SIZE + length, 1);
 
-	unsigned char *outputBuffer = (unsigned char*)calloc(((s.length() + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE, 1);
-
-	for (size_t i = 0; i < s.length(); i += 16) {
-		AES_encrypt((const unsigned char*)s.c_str() + i, outputBuffer + i, &encryptKey);
+	for (size_t i = 0; i < length; i += 16) {
+		AES_encrypt((const unsigned char*)s + i, outputBuffer + i, &encryptKey);
 	}
 
-	return (unsigned char*)outputBuffer;
+	return (char*)outputBuffer;
 }
 
-string decrypt(unsigned char* s) {
+char* decrypt(char* s, size_t length) {
 	AES_KEY decryptKey;
 	AES_set_decrypt_key((const unsigned char*)XLOGIN, 128, &decryptKey);
 
-	unsigned char *outputBuffer = (unsigned char*)calloc(strlen((char*)s) + (AES_BLOCK_SIZE % strlen((char*)s)), 1);
+	unsigned char *outputBuffer = (unsigned char*)calloc(length + (AES_BLOCK_SIZE % length), 1);
 
-	for (size_t i = 0; i < strlen((char*)s); i += 16) {
+	for (size_t i = 0; i < length; i += 16) {
 		AES_decrypt((const unsigned char*)s + i, outputBuffer + i, &decryptKey);
 	}
 
-	string out((char*)outputBuffer);
-
-	return out;
+	return (char*)outputBuffer;
 }
 
 // ICMP checksum according to RFC 792
@@ -235,7 +230,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 }
 
                 u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
-                u_char* icmpData = (u_char*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
+                u_char* icmpData = (u_char*)decrypt((char*)payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr), icmpDataLength);
 
                 if (verbose) {
                     cout << "IP version: 4" << endl;
@@ -433,8 +428,8 @@ int runServer() {
 }
 
 int runClient(string fileToTransfer, string receiverAddress) {
-    verbose && cout << "File to transfer: " << optarg << endl;
-    verbose && cout << "Receiver address: " << optarg << endl;
+    verbose && cout << "File to transfer: " << fileToTransfer << endl;
+    verbose && cout << "Receiver address: " << receiverAddress << endl;
     // check whether file exists and is accessible
     struct stat fileInfo;
 
@@ -500,6 +495,7 @@ int runClient(string fileToTransfer, string receiverAddress) {
         verbose && cout << "Remaining bytes: " << fileLength << endl;
 
         char dataSlice[MAX_ICMP_DATA_SIZE];
+        memset(dataSlice, 0, MAX_ICMP_DATA_SIZE);
 
         int bytesForData = MAX_ICMP_DATA_SIZE - filename.length() - 1;
 
@@ -507,8 +503,9 @@ int runClient(string fileToTransfer, string receiverAddress) {
         dataSlice[filename.length()] = '\0';
 
         dataToSend.read(dataSlice + filename.length() + 1, bytesForData);
-        
-        sendIcmpPacket(usingIPv6 ? (struct sockaddr*)&addressIn6 : (struct sockaddr*)&addressIn, usingIPv6, dataSlice, min((int)(fileLength + filename.length() + 1), MAX_ICMP_DATA_SIZE), segmentIndex);
+        size_t dataSliceLength = min((int)(fileLength + filename.length() + 1), MAX_ICMP_DATA_SIZE);
+
+        sendIcmpPacket(usingIPv6 ? (struct sockaddr*)&addressIn6 : (struct sockaddr*)&addressIn, usingIPv6, encrypt(dataSlice, dataSliceLength), dataSliceLength, segmentIndex);
 
         fileLength -= bytesForData;
     }
