@@ -29,9 +29,9 @@
 using namespace std;
 
 #define XLOGIN "xoleks00xoleks00"
-#define IDENTIFICATION 0x85ac
+#define IDENTIFICATION 0xdac
 
-#define MAX_ICMP_DATA_SIZE 1400
+#define MAX_ICMP_DATA_SIZE 1408 // must be divisible by AES_BLOCK_SIZE
 
 // getopt shorthands
 #define OPT_NO_ARGUMENT 0
@@ -97,7 +97,7 @@ char* encrypt(char *s, size_t length) {
 	AES_KEY encryptKey;
 	AES_set_encrypt_key((const unsigned char*)XLOGIN, 128, &encryptKey);
 
-	unsigned char *outputBuffer = (unsigned char*)calloc((AES_BLOCK_SIZE - length % AES_BLOCK_SIZE) % AES_BLOCK_SIZE + length, 1);
+	unsigned char *outputBuffer = (unsigned char*)calloc(length, 1);
 
 	for (size_t i = 0; i < length; i += 16) {
 		AES_encrypt((const unsigned char*)s + i, outputBuffer + i, &encryptKey);
@@ -163,18 +163,19 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
         }
     }
 
-    if (fcntl(socketDescriptor, F_SETFL, O_NONBLOCK) != 0 ) {
+    if (fcntl(socketDescriptor, F_SETFL, O_NONBLOCK) != 0) {
         cerr << "Failed to set non-blocking" << endl;
         return false;
     }
 
     struct icmp icmpHeader;
+    char padding = dataLength + (AES_BLOCK_SIZE - dataLength % AES_BLOCK_SIZE) % AES_BLOCK_SIZE - dataLength;
 
     // fill in ICMP header metadata
     icmpHeader.icmp_type = ICMP_ECHO;
     icmpHeader.icmp_code = 0;
     icmpHeader.icmp_cksum = 0;
-    icmpHeader.icmp_id = IDENTIFICATION;
+    icmpHeader.icmp_id = IDENTIFICATION << 4 | padding;
     icmpHeader.icmp_seq = sequenceNumber;
 
     // fill in ICMP data
@@ -182,12 +183,12 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
     u_int8_t *icmpData = icmpBuffer + 8;
 
     memcpy(icmpBuffer, &icmpHeader, 8);
-    memcpy(icmpData, data, dataLength);
+    memcpy(icmpData, data, dataLength + padding);
 
-    icmpHeader.icmp_cksum = getIcmpChecksum((uint16_t*)icmpBuffer, 8 + dataLength);
+    icmpHeader.icmp_cksum = getIcmpChecksum((uint16_t*)icmpBuffer, 8 + dataLength + padding);
     memcpy(icmpBuffer, &icmpHeader, 8);
 
-    if (sendto(socketDescriptor, icmpBuffer, 8 + dataLength, 0, addr, ipv6 ? sizeof(*((struct sockaddr_in6*)addr)) : sizeof(*((struct sockaddr_in*)addr))) <= 0) {
+    if (sendto(socketDescriptor, icmpBuffer, 8 + dataLength + padding, 0, addr, ipv6 ? sizeof(*((struct sockaddr_in6*)addr)) : sizeof(*((struct sockaddr_in*)addr))) <= 0) {
         cerr << "Failed to send packet: " << strerror(errno) << endl;
         return false;
     }
@@ -225,9 +226,11 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
             if (headerIPv4->protocol == IPPROTO_ICMP) {
                 struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
 
-                if (icmpPacket->un.echo.id != IDENTIFICATION) {
+                if (icmpPacket->un.echo.id >> 4 != IDENTIFICATION) {
                     return;
                 }
+
+                char padding = icmpPacket->un.echo.id & 0xf;
 
                 u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
                 u_char* icmpData = (u_char*)decrypt((char*)payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr), icmpDataLength);
@@ -242,6 +245,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                     cout << "Checksum: " << icmpPacket->checksum << endl;
                     cout << "Total length: " << packetHeader->caplen << endl;
                     cout << "Data length: " << icmpDataLength << endl;
+                    cout << "Padding: " << (int)padding << endl;
                     cout << "Filename: " << (char*)icmpData << endl;
 
                     printPacketData((u_char*)icmpData, icmpDataLength);
@@ -257,7 +261,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 std::ofstream outfile;
 
                 outfile.open((char*)icmpData, std::ios_base::app);
-                outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1));
+                outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1) - padding);
                 outfile.close();
             }
             else {
@@ -287,7 +291,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
             if (protocol == IPPROTO_ICMPV6) {
                 struct icmp6_hdr *icmpPacket = (struct icmp6_hdr*)(payload + ETH_HLEN + 40);
                 
-                if (icmpPacket->icmp6_dataun.icmp6_un_data16[0] != IDENTIFICATION) {
+                if (icmpPacket->icmp6_dataun.icmp6_un_data16[0] >> 4 != IDENTIFICATION) {
                     return;
                 }
 
@@ -503,9 +507,12 @@ int runClient(string fileToTransfer, string receiverAddress) {
         dataSlice[filename.length()] = '\0';
 
         dataToSend.read(dataSlice + filename.length() + 1, bytesForData);
+        int dataLength = fileLength + filename.length() + 1;
+
+        size_t dataSliceLengthWithPadding = min(dataLength + (AES_BLOCK_SIZE - dataLength % AES_BLOCK_SIZE) % AES_BLOCK_SIZE, MAX_ICMP_DATA_SIZE);
         size_t dataSliceLength = min((int)(fileLength + filename.length() + 1), MAX_ICMP_DATA_SIZE);
 
-        sendIcmpPacket(usingIPv6 ? (struct sockaddr*)&addressIn6 : (struct sockaddr*)&addressIn, usingIPv6, encrypt(dataSlice, dataSliceLength), dataSliceLength, segmentIndex);
+        sendIcmpPacket(usingIPv6 ? (struct sockaddr*)&addressIn6 : (struct sockaddr*)&addressIn, usingIPv6, encrypt(dataSlice, dataSliceLengthWithPadding), dataSliceLength, segmentIndex);
 
         fileLength -= bytesForData;
     }
