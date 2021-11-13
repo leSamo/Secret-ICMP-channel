@@ -1,6 +1,5 @@
 import subprocess, string, filecmp, os, time, signal
 
-DELIMETER = "====================\n\n\n"
 WAIT_TIME = 2
 SERVER_COMMAND = "sudo ./secret -l"
 
@@ -26,7 +25,7 @@ def test(number, description, fileToSend, address):
     
     time.sleep(WAIT_TIME)
 
-    subprocess.Popen(f"sudo ./secret -r {fileToSend} -s {address}", shell=True)
+    subprocess.Popen(f"sudo ./secret -r {fileToSend} -s {address} >/dev/null", shell=True)
     
     time.sleep(WAIT_TIME)
     os.killpg(os.getpgid(server.pid), signal.SIGTERM) 
@@ -35,12 +34,13 @@ def test(number, description, fileToSend, address):
 
     if os.path.isfile(receivedFilename) and filecmp.cmp(fileToSend, receivedFilename):
         print(color.GREEN + "PASSED" + color.RESET)
+        os.remove(receivedFilename)
         passedCount += 1
     else:
         print(color.RED + "FAILED" + color.RESET)
 
 def recap():
-    print("====================\n")
+    print("====================")
     print(color.YELLOW + f"PASSED {passedCount}/{allCount}" + color.RESET)
 
 test(1, "it should send tiny plain text file to provided IPv4 local address", "test/test1.txt", "192.168.0.1")
