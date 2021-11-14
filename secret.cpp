@@ -25,6 +25,7 @@
 #include <openssl/aes.h>
 
 #include <pcap/pcap.h>
+#include <pcap/sll.h>
 
 using namespace std;
 
@@ -33,9 +34,11 @@ using namespace std;
 
 #define MAX_ICMP_DATA_SIZE 1392                 // must be divisible by AES_BLOCK_SIZE
 
+#define IPV6_HEADER_SIZE 40
+
 #define PCAP_BUFFER_SIZE 0x10000000
 #define PCAP_FILTER "icmp[icmptype]=icmp-echo or icmp6[icmp6type]=icmp6-echo"
-#define PCAP_INTERFACE "enp0s3"
+#define PCAP_INTERFACE "any"
 
 bool verbose = false;
 
@@ -206,24 +209,19 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
 // callback function to receive ICMP messages and save data to file
 void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_char* payload) {
     // split ethernet header into its corresponding fields
-    ether_header *headerEthernet = (ether_header*)payload;
-    string destMac = ether_ntoa((ether_addr*) headerEthernet->ether_dhost);
-    string srcMac = ether_ntoa((ether_addr*) headerEthernet->ether_shost);
-    u_short ethertype = ntohs(headerEthernet->ether_type);
+    struct sll_header *headerEthernet = (struct sll_header*)payload;
+    u_short ethertype = ntohs(headerEthernet->sll_protocol);
 
     string sourceIPaddr;
     string destIPaddr;
-    string sourcePort = "";
-    string destPort = "";
-    int ipv4HeaderLengthInBytes;
 
     switch (ethertype) {
         case ETHERTYPE_IP: { // IPv4
             // remove ethernet header from packet
-            struct iphdr *headerIPv4 = (struct iphdr*)(payload + ETH_HLEN);
+            struct iphdr *headerIPv4 = (struct iphdr*)((char*)headerEthernet + SLL_HDR_LEN);
 
             // header lenght is in rows of 4 bytes, multiply by 4 to get length in bytes
-            ipv4HeaderLengthInBytes = headerIPv4->ihl << 2;
+            int ipv4HeaderLengthInBytes = headerIPv4->ihl << 2;
 
             // convert addresses to human readable format
             sourceIPaddr = inet_ntoa(in_addr {headerIPv4->saddr});
@@ -231,7 +229,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
             if (headerIPv4->protocol == IPPROTO_ICMP) { // ICMP
                 // remove IP header from packet
-                struct icmphdr *icmpPacket = (struct icmphdr*)(payload + ETH_HLEN + ipv4HeaderLengthInBytes);
+                struct icmphdr *icmpPacket = (struct icmphdr*)((char*)headerIPv4 + ipv4HeaderLengthInBytes);
 
                 // if packet id does not match, drop it because this packet was not created by correct client
                 if (icmpPacket->un.echo.id >> 4 != IDENTIFICATION) {
@@ -241,8 +239,8 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 char padding = icmpPacket->un.echo.id & 0xf;
 
                 // remove ICMP header from packet
-                u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
-                u_char* icmpData = (u_char*)decrypt((char*)payload + ETH_HLEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr), icmpDataLength);
+                u_int icmpDataLength = packetHeader->caplen - (SLL_HDR_LEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
+                u_char* icmpData = (u_char*)decrypt((char*)icmpPacket + sizeof(struct icmphdr), icmpDataLength);
 
                 if (verbose) {
                     cout << "IP version: 4" << endl;
@@ -284,7 +282,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
         case ETHERTYPE_IPV6: { 
             // remove ethernet header from packet
-            struct ip6_hdr *headerIPv6 = (struct ip6_hdr*)(payload + ETH_HLEN);
+            struct ip6_hdr *headerIPv6 = (struct ip6_hdr*)((char*)headerEthernet + SLL_HDR_LEN);
 
             // parse IPv6 addresses to notation with :
             in6_addr inDstAddr = {headerIPv6->ip6_dst};
@@ -301,7 +299,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
             u_int8_t protocol = headerIPv6->ip6_ctlun.ip6_un1.ip6_un1_nxt;
 
             if (protocol == IPPROTO_ICMPV6) { // ICMPv6
-                struct icmp6_hdr *icmpPacket = (struct icmp6_hdr*)(payload + ETH_HLEN + 40);
+                struct icmp6_hdr *icmpPacket = (struct icmp6_hdr*)((char*)headerIPv6 + IPV6_HEADER_SIZE);
                 
                 // if packet id does not match, drop it because this packet was not created by correct client
                 if (icmpPacket->icmp6_dataun.icmp6_un_data16[0] >> 4 != IDENTIFICATION) {
@@ -310,8 +308,8 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
                 char padding = icmpPacket->icmp6_dataun.icmp6_un_data16[0] & 0xf;
 
-                u_int icmpDataLength = packetHeader->caplen - (ETH_HLEN + 40 + sizeof(struct icmphdr));
-                u_char* icmpData = (u_char*)decrypt((char*)payload + ETH_HLEN + 40 + sizeof(struct icmphdr), icmpDataLength);
+                u_int icmpDataLength = packetHeader->caplen - (SLL_HDR_LEN + IPV6_HEADER_SIZE + sizeof(struct icmphdr));
+                u_char* icmpData = (u_char*)decrypt((char*)icmpPacket + sizeof(struct icmphdr), icmpDataLength);
 
                 if (verbose) {
                     cout << "IP version: 6" << endl;
@@ -367,15 +365,6 @@ int runServer() {
 
     if (!handle) {
         cerr << "Error creating pcap handle: " << errbuf << endl;
-        return EXIT_FAILURE;
-    }
-
-    // enable promiscuous mode, returns 0 if successful
-    retval = pcap_set_promisc(handle, 1);
-
-    if (retval != 0) {
-        pcap_perror(handle, "Error enabling promiscuous mode");
-        pcap_close(handle);
         return EXIT_FAILURE;
     }
 
