@@ -145,7 +145,7 @@ uint16_t getIcmpChecksum(uint16_t *buffer, size_t length) {
 
 // create ICMP packet containing data and send it to provided IPv4 or IPv6 address
 // returns true if packet was sent successfully
-bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLength, uint16_t sequenceNumber) {
+bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLength, uint32_t sequenceNumber) {
     const uint8_t TTL = 255;
 
     int socketDescriptor;
@@ -179,12 +179,14 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
 
     struct icmp icmpHeader;
 
+    bool isFirst = sequenceNumber == 0;
+
     // fill in ICMP header metadata
     icmpHeader.icmp_type = ipv6 ? ICMP6_ECHO_REQUEST : ICMP_ECHO;
     icmpHeader.icmp_code = 0;
     icmpHeader.icmp_cksum = 0;
-    icmpHeader.icmp_id = IDENTIFICATION << 4 | padding;
-    icmpHeader.icmp_seq = sequenceNumber;
+    icmpHeader.icmp_id = IDENTIFICATION << 4 | isFirst << 4 | padding;
+    icmpHeader.icmp_seq = sequenceNumber & 0xffff;
 
     // fill in ICMP data
     u_int8_t icmpBuffer[1500];
@@ -232,7 +234,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 struct icmphdr *icmpPacket = (struct icmphdr*)((char*)headerIPv4 + ipv4HeaderLengthInBytes);
 
                 // if packet id does not match, drop it because this packet was not created by correct client
-                if (icmpPacket->un.echo.id >> 4 != IDENTIFICATION) {
+                if ((icmpPacket->un.echo.id >> 5) << 1 != IDENTIFICATION) {
                     return;
                 }
 
@@ -262,14 +264,19 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
                 size_t filenameLength = strlen((char*)icmpData);
 
-                // TODO: Cursor to rewrite file if exists and prevent reordering of packets
-                // TODO: Handle error when opening/writing to file
-                // TODO: Send -first- bit to indicate this is a first file packet and should rewrite existing file
                 // write data to file in append mode
-                std::ofstream outfile;
+                ofstream outfile;
+
+                bool overwrite = (icmpPacket->un.echo.id >> 4) & 1;
 
                 // filename is saved at the beginning of icmpData buffer and is separated from data with NULL byte
-                outfile.open((char*)icmpData, std::ios_base::app);
+                outfile.open((char*)icmpData, overwrite ? ios_base::out : ios_base::app);
+
+                if (!outfile) {
+                    cerr << "Failed to open file for writing" << endl;
+                    return;
+                }
+
                 // data is in buffer after the NULL byte, make sure not to write encryption padding bytes
                 outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1) - padding);
                 outfile.close();
@@ -302,7 +309,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 struct icmp6_hdr *icmpPacket = (struct icmp6_hdr*)((char*)headerIPv6 + IPV6_HEADER_SIZE);
                 
                 // if packet id does not match, drop it because this packet was not created by correct client
-                if (icmpPacket->icmp6_dataun.icmp6_un_data16[0] >> 4 != IDENTIFICATION) {
+                if ((icmpPacket->icmp6_dataun.icmp6_un_data16[0] >> 5) << 1 != IDENTIFICATION) {
                     return;
                 }
 
@@ -330,12 +337,17 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
                 size_t filenameLength = strlen((char*)icmpData);
 
-                // TODO: Cursor to rewrite file if exists and prevent reordering of packets
-                // TODO: Handle error when opening/writing to file
-                // write data to file in append mode
-                std::ofstream outfile;
+                bool overwrite = (icmpPacket->icmp6_dataun.icmp6_un_data16[0] >> 4) & 1;
 
-                outfile.open((char*)icmpData, std::ios_base::app);
+                // write data to file in append mode
+                ofstream outfile;
+
+                if (!outfile) {
+                    cerr << "Failed to open file for writing" << endl;
+                    return;
+                }
+
+                outfile.open((char*)icmpData, overwrite ? ios_base::out : ios_base::app);
                 outfile << string((char*)icmpData + filenameLength + 1, icmpDataLength - (filenameLength + 1) - padding); 
                 outfile.close();
             }
@@ -476,6 +488,7 @@ int runClient(string fileToTransfer, string receiverAddress) {
 
     bool usingIPv6 = false;
 
+    // TODO: Translate IPv6 hostname
     if (inet_pton(AF_INET, receiverAddress.c_str(), &addressIn.sin_addr)) {
         verbose && cout << "IPv4 address valid: " << receiverAddress << endl;
     }

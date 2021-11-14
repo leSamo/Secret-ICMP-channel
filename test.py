@@ -21,10 +21,6 @@ def test(description, fileToSend, address):
 
     receivedFilename = os.path.basename(fileToSend)
 
-    # if file with same filename as received file exists, delete it first
-    if os.path.isfile(receivedFilename):
-        os.remove(receivedFilename)
-
     server = subprocess.Popen("sudo ./secret -l", shell=True, preexec_fn=os.setsid)
     
     time.sleep(WAIT_TIME)
