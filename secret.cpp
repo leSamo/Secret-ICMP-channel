@@ -384,7 +384,7 @@ int runServer() {
     retval = pcap_set_immediate_mode(handle, true);
 
     if (retval != 0) {
-        pcap_perror(handle, "Error enabling immediate mode");
+        pcap_perror(handle, (char*)"Error enabling immediate mode");
         pcap_close(handle);
         return EXIT_FAILURE;
     }
@@ -393,7 +393,7 @@ int runServer() {
     retval = pcap_set_buffer_size(handle, PCAP_BUFFER_SIZE);
 
     if (retval != 0) {
-        pcap_perror(handle, "Error setting pcap buffer size");
+        pcap_perror(handle, (char*)"Error setting pcap buffer size");
         pcap_close(handle);
         return EXIT_FAILURE;
     }
@@ -402,7 +402,7 @@ int runServer() {
     retval = pcap_activate(handle);
 
     if (retval != 0) {
-        pcap_perror(handle, "Error activating pcap handle");
+        pcap_perror(handle, (char*)"Error activating pcap handle");
         pcap_close(handle);
         return EXIT_FAILURE;
     }
@@ -419,7 +419,7 @@ int runServer() {
     retval = pcap_compile(handle, &filter, PCAP_FILTER, 0, netp);
 
     if (retval != 0) {
-        pcap_perror(handle, "Error compiling pcap filter");
+        pcap_perror(handle, (char*)"Error compiling pcap filter");
         pcap_close(handle);
         return EXIT_FAILURE;
     }
@@ -428,7 +428,7 @@ int runServer() {
     retval = pcap_setfilter(handle, &filter);
 
     if (retval != 0) {
-        pcap_perror(handle, "Error setting pcap filter");
+        pcap_perror(handle, (char*)"Error setting pcap filter");
         pcap_close(handle);
         return EXIT_FAILURE;
     }
