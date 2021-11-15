@@ -185,8 +185,8 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
     icmpHeader.icmp_type = ipv6 ? ICMP6_ECHO_REQUEST : ICMP_ECHO;
     icmpHeader.icmp_code = 0;
     icmpHeader.icmp_cksum = 0;
-    icmpHeader.icmp_id = IDENTIFICATION << 4 | isFirst << 4 | padding;
-    icmpHeader.icmp_seq = sequenceNumber & 0xffff;
+    icmpHeader.icmp_id = 0;
+    icmpHeader.icmp_seq = IDENTIFICATION << 4 | isFirst << 4 | padding;
 
     // fill in ICMP data
     u_int8_t icmpBuffer[1500];
@@ -234,11 +234,11 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 struct icmphdr *icmpPacket = (struct icmphdr*)((char*)headerIPv4 + ipv4HeaderLengthInBytes);
 
                 // if packet id does not match, drop it because this packet was not created by correct client
-                if ((icmpPacket->un.echo.id >> 5) << 1 != IDENTIFICATION) {
+                if ((icmpPacket->un.echo.sequence >> 5) << 1 != IDENTIFICATION) {
                     return;
                 }
 
-                char padding = icmpPacket->un.echo.id & 0xf;
+                char padding = icmpPacket->un.echo.sequence & 0xf;
 
                 // remove ICMP header from packet
                 u_int icmpDataLength = packetHeader->caplen - (SLL_HDR_LEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
@@ -267,7 +267,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 // write data to file in append mode
                 ofstream outfile;
 
-                bool overwrite = (icmpPacket->un.echo.id >> 4) & 1;
+                bool overwrite = (icmpPacket->un.echo.sequence >> 4) & 1;
 
                 // filename is saved at the beginning of icmpData buffer and is separated from data with NULL byte
                 outfile.open((char*)icmpData, overwrite ? ios_base::out : ios_base::app);
@@ -309,11 +309,11 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 struct icmp6_hdr *icmpPacket = (struct icmp6_hdr*)((char*)headerIPv6 + IPV6_HEADER_SIZE);
                 
                 // if packet id does not match, drop it because this packet was not created by correct client
-                if ((icmpPacket->icmp6_dataun.icmp6_un_data16[0] >> 5) << 1 != IDENTIFICATION) {
+                if ((icmpPacket->icmp6_dataun.icmp6_un_data16[1] >> 5) << 1 != IDENTIFICATION) {
                     return;
                 }
 
-                char padding = icmpPacket->icmp6_dataun.icmp6_un_data16[0] & 0xf;
+                char padding = icmpPacket->icmp6_dataun.icmp6_un_data16[1] & 0xf;
 
                 u_int icmpDataLength = packetHeader->caplen - (SLL_HDR_LEN + IPV6_HEADER_SIZE + sizeof(struct icmphdr));
                 u_char* icmpData = (u_char*)decrypt((char*)icmpPacket + sizeof(struct icmphdr), icmpDataLength);
@@ -337,7 +337,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
 
                 size_t filenameLength = strlen((char*)icmpData);
 
-                bool overwrite = (icmpPacket->icmp6_dataun.icmp6_un_data16[0] >> 4) & 1;
+                bool overwrite = (icmpPacket->icmp6_dataun.icmp6_un_data16[1] >> 4) & 1;
 
                 // write data to file in append mode
                 ofstream outfile;
