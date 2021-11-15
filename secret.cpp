@@ -32,7 +32,7 @@ using namespace std;
 #define XLOGIN "xoleks00xoleks00"               // AES encryption/decryption key
 #define IDENTIFICATION 0xdac                    // bytes for ICMP ping identification field
 
-#define MAX_ICMP_DATA_SIZE 1392                 // must be divisible by AES_BLOCK_SIZE
+#define MAX_ICMP_DATA_SIZE 1376                 // must be divisible by AES_BLOCK_SIZE
 
 #define IPV6_HEADER_SIZE 40
 
@@ -186,20 +186,23 @@ bool sendIcmpPacket(sockaddr *addr, bool ipv6, const char* data, uint16_t dataLe
     icmpHeader.icmp_code = 0;
     icmpHeader.icmp_cksum = 0;
     icmpHeader.icmp_id = 0;
-    icmpHeader.icmp_seq = IDENTIFICATION << 4 | isFirst << 4 | padding;
+    icmpHeader.icmp_seq = 0;
+
+    uint32_t flags = IDENTIFICATION << 4 | isFirst << 4 | padding;
 
     // fill in ICMP data
     u_int8_t icmpBuffer[1500];
-    u_int8_t *icmpData = icmpBuffer + 8;
+    u_int8_t *icmpData = icmpBuffer + 12;
 
     memcpy(icmpBuffer, &icmpHeader, 8);
+    memcpy(icmpBuffer + 8, &flags, 4);
     memcpy(icmpData, data, dataLength + padding);
 
     // calculate and fill in ICMP checksum
     icmpHeader.icmp_cksum = getIcmpChecksum((uint16_t*)icmpBuffer, 8 + dataLength + padding);
     memcpy(icmpBuffer, &icmpHeader, 8);
 
-    if (sendto(socketDescriptor, icmpBuffer, 8 + dataLength + padding, 0, addr, ipv6 ? sizeof(*((struct sockaddr_in6*)addr)) : sizeof(*((struct sockaddr_in*)addr))) <= 0) {
+    if (sendto(socketDescriptor, icmpBuffer, 12 + dataLength + padding, 0, addr, ipv6 ? sizeof(*((struct sockaddr_in6*)addr)) : sizeof(*((struct sockaddr_in*)addr))) <= 0) {
         cerr << "Failed to send packet: " << strerror(errno) << endl;
         return false;
     }
@@ -234,15 +237,16 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 struct icmphdr *icmpPacket = (struct icmphdr*)((char*)headerIPv4 + ipv4HeaderLengthInBytes);
 
                 // if packet id does not match, drop it because this packet was not created by correct client
-                if ((icmpPacket->un.echo.sequence >> 5) << 1 != IDENTIFICATION) {
+                int32_t flags = *((int32_t*)(((char*)icmpPacket) + sizeof(struct icmphdr)));
+                if ((flags >> 5) << 1 != IDENTIFICATION) {
                     return;
                 }
 
-                char padding = icmpPacket->un.echo.sequence & 0xf;
+                char padding = flags & 0xf;
 
                 // remove ICMP header from packet
-                u_int icmpDataLength = packetHeader->caplen - (SLL_HDR_LEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr));
-                u_char* icmpData = (u_char*)decrypt((char*)icmpPacket + sizeof(struct icmphdr), icmpDataLength);
+                u_int icmpDataLength = packetHeader->caplen - (SLL_HDR_LEN + ipv4HeaderLengthInBytes + sizeof(struct icmphdr) + 4);
+                u_char* icmpData = (u_char*)decrypt((char*)icmpPacket + sizeof(struct icmphdr) + 4, icmpDataLength);
 
                 if (verbose) {
                     cout << "IP version: 4" << endl;
@@ -267,7 +271,7 @@ void capturePacket(u_char* arg, const struct pcap_pkthdr* packetHeader, const u_
                 // write data to file in append mode
                 ofstream outfile;
 
-                bool overwrite = (icmpPacket->un.echo.sequence >> 4) & 1;
+                bool overwrite = (flags >> 4) & 1;
 
                 // filename is saved at the beginning of icmpData buffer and is separated from data with NULL byte
                 outfile.open((char*)icmpData, overwrite ? ios_base::out : ios_base::app);
